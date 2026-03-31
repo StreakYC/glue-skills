@@ -355,6 +355,10 @@ const apiKey = "super-secret";
 
 ## Documentation
 
+### Glue Documentation
+
+The Glue documentation is available at [docs.glue.wtf](https://docs.glue.wtf/llms-full.txt).
+
 ### Glue Runtime API
 
 The Glue runtime API is documented on [JSR](https://jsr.io/@streak-glue/runtime/doc) or by running `deno doc jsr:@streak-glue/runtime`.
