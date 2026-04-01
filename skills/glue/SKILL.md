@@ -67,6 +67,12 @@ glue whoami
 glue create
 ```
 
+### Typechecking
+Glues are just standard Deno TypeScript files. You can use the standard tooling to type check them, lint them, and format them.
+```bash
+deno check path/to/your-glue.ts
+```
+
 ### Run locally
 
 ```bash
@@ -357,7 +363,7 @@ const apiKey = "super-secret";
 
 ### Glue Documentation
 
-The Glue documentation is available at [docs.glue.wtf](https://docs.glue.wtf/llms-full.txt).
+The Glue documentation is available at [docs.glue.wtf](https://docs.glue.wtf/llms-full.txt ).
 
 ### Glue Runtime API
 
