@@ -51,7 +51,7 @@ curl -fsSL https://glue.wtf/install.sh | bash
 Or install directly with Deno:
 
 ```bash
-deno install --unstable-kv --unstable-temporal -Agfrn glue jsr:@streak-glue/cli
+deno install --unstable-kv -Agfrn glue jsr:@streak-glue/cli
 ```
 
 ### Sign in
