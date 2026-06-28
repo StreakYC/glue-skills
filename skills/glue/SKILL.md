@@ -4,7 +4,7 @@ description: Use when building, debugging, or deploying Glue automations with th
 license: MIT
 metadata:
   author: Streak
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Glue
@@ -51,7 +51,7 @@ curl -fsSL https://glue.wtf/install.sh | bash
 Or install directly with Deno:
 
 ```bash
-deno install --unstable-kv --unstable-temporal -Agfrn glue jsr:@streak-glue/cli
+deno install --unstable-kv -Agfrn glue jsr:@streak-glue/cli
 ```
 
 ### Sign in
@@ -105,16 +105,54 @@ CRITICAL: Register handlers at the top level during initialization. Do not regis
 
 Glue handlers usually do two things:
 
-- Register a trigger that listens for an external event
-- Use credentials or SDK clients to take an action in response
+- Register a trigger that listens for an external event from some service.
+- Use credentials or SDK clients to take an action in response.
 
 For example, a Slack message or GitHub pull request can trigger your Glue, and then your code can call another API using the correct account credentials.
 
-### Accounts and credential fetchers
+### Accounts, credential fetchers, and secret fetchers
 
-Glue stores external service credentials as accounts. Your code should use Glue's runtime integrations and credential fetchers instead of hardcoding secrets.
+Glue has a concept of accounts that store credentials for specific third-party services. Most kinds of triggers in a Glue script must be associated with a specific account at deployment time (or during `glue dev`) for a deployment to become active.
 
-CRITICAL: Never hardcode API keys, OAuth tokens, or account credentials in the Glue file or in checked-in `.env` files.
+Many account types have credential fetchers that can be used to get a valid access token or SDK client for the account. For example, `glue.google.createCredentialFetcher()` returns a credential fetcher that can be used to get an access token for a Google account to use with Google APIs and client libraries. The `get()` method on a credential fetcher can only be called inside a Glue handler, not at the top level of the script.
+
+```typescript
+import { glue } from "jsr:@streak-glue/runtime";
+import { OAuth2Client } from "npm:google-auth-library@10";
+import { GoogleSpreadsheet } from "npm:google-spreadsheet@5";
+
+const googleCredFetcher = glue.google.createCredentialFetcher({
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+glue.webhook.onGet(async (_event) => {
+  const auth = new OAuth2Client();
+  const credential = await googleCredFetcher.get();
+  auth.setCredentials({ access_token: credential.accessToken });
+
+  const sheetId = "...";
+  const doc = new GoogleSpreadsheet(sheetId, auth);
+
+  await doc.loadInfo();
+  console.log("Loaded doc:", doc.title);
+  console.log("Number of sheets:", doc.sheetCount);
+});
+```
+
+If a Glue script needs to access external services that Glue does not have an account type for, then you can use a secret fetcher to retrieve a secret value from a Glue account. Secret fetchers are a replacement for environment variables.
+
+```typescript
+import ExampleClient from "npm:example@2";
+
+const exampleApiKey = glue.secrets.createSecretFetcher("EXAMPLE_API_KEY");
+
+glue.webhook.onPost(async (_event) => {
+  const example = new ExampleClient(await exampleApiKey.get());
+  // ...
+});
+```
+
+Remember: Never hardcode API keys, OAuth tokens, or account credentials in the Glue script. Use Glue credential fetchers and secret fetchers instead.
 
 ### Executions and replay
 
@@ -169,6 +207,23 @@ glue.cron.everyXMinutes(30, () => {
 });
 ```
 
+### Delays
+
+Glue scripts can not run for more than 2 minutes at a time. Long delays should be implemented with delayed tasks, and long tasks should be split into multiple calls to a delayed task.
+
+```typescript
+glue.webhooks.onPost(async (event) => {
+  const body = JSON.parse(event.bodyText!);
+  const userEmail = body.userEmail;
+  await userProcessingTask.schedule(userEmail, { delay: `15 minutes` });
+});
+
+const userProcessingTask = glue.tasks.createDelayedTask(async (userEmail: string) => {
+  console.log(`Processing delayed task for ${userEmail}`);
+  // ...
+});
+```
+
 ### Gmail triggers
 
 ```typescript
@@ -176,18 +231,16 @@ import { glue } from "jsr:@streak-glue/runtime";
 
 glue.gmail.onMessage((event) => {
   console.log("New email subject:", event.subject);
-}, {
-  accountEmailAddress: "support@example.com",
 });
 ```
 
 ### Calling third-party SDKs
 
-When Glue gives you access to a service account, prefer the service's official client library over raw HTTP calls.
+When Glue gives you access to an account, prefer the service's official client library over raw HTTP calls. Here's an example of using the Slack Web API client with a Slack account credential fetcher:
 
 ```typescript
 import { glue } from "jsr:@streak-glue/runtime";
-import { WebClient } from "npm:@slack/web-api";
+import { WebClient } from "npm:@slack/web-api@7";
 
 const slackFetcher = glue.slack.createBotMessageSendingCredentialFetcher();
 
@@ -259,6 +312,8 @@ Use `glue logs` to inspect execution history and live runs, and `glue describe` 
 The main `glue` object exposes integrations including:
 
 - `glue.webhook`
+- `glue.tasks`
+- `glue.secrets`
 - `glue.cron`
 - `glue.github`
 - `glue.gmail`
@@ -356,7 +411,8 @@ const apiKey = "super-secret";
 // ❌ Wrong - handwritten auth and API plumbing when an official client exists
 
 // ✅ Correct - prefer the official SDK for GitHub, Slack, Stripe, Google, etc.
-// Use Glue runtime integrations and credentials to configure the SDK cleanly.
+// Import official client libraries from NPM or JSR.
+// Use Glue credential fetchers or secret fetchers for authentication.
 ```
 
 ## Documentation
