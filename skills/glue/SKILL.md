@@ -4,7 +4,7 @@ description: Use when building, debugging, or deploying Glue automations with th
 license: MIT
 metadata:
   author: Streak
-  version: "1.1"
+  version: "1.2"
 ---
 
 # Glue
@@ -26,7 +26,7 @@ A typical Glue workflow is:
 
 Use Glue when you need to:
 
-- React to real events from services like GitHub, Gmail, Slack, Stripe, Intercom, webhooks, cron, Google Drive, Google Sheets, or Streak
+- React to real events from services like GitHub, Gmail, Slack, Stripe, Intercom, QuickBooks, Notion, webhooks, cron, Google Drive, Google Sheets, or Streak
 - Write automation logic in a single TypeScript entrypoint instead of building webhook infrastructure yourself
 - Debug event-driven behavior locally using real tunneled events
 - Replay production events locally or on a deployed Glue to reproduce bugs
@@ -99,7 +99,7 @@ glue.webhook.onPost((event) => {
 });
 ```
 
-CRITICAL: Register handlers at the top level during initialization. Do not register handlers dynamically after the program has already started.
+CRITICAL: Register handlers at the top level during initialization. Do not register handlers dynamically after the program has already started, and do not `await` anything above the registrations. An `await` before them fails with "Attempted to register a trigger after initialization".
 
 ### Triggers vs actions
 
@@ -108,7 +108,7 @@ Glue handlers usually do two things:
 - Register a trigger that listens for an external event from some service.
 - Use credentials or SDK clients to take an action in response.
 
-For example, a Slack message or GitHub pull request can trigger your Glue, and then your code can call another API using the correct account credentials.
+For example, a Slack message or GitHub pull request can trigger your Glue, and then your code can call another API using the correct account credentials. Prefer an event trigger over a cron that polls for changes.
 
 ### Accounts, credential fetchers, and secret fetchers
 
@@ -123,6 +123,7 @@ import { GoogleSpreadsheet } from "npm:google-spreadsheet@5";
 
 const googleCredFetcher = glue.google.createCredentialFetcher({
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  accountSelector: { email: "ops@example.com" },
 });
 
 glue.webhook.onGet(async (_event) => {
@@ -139,7 +140,7 @@ glue.webhook.onGet(async (_event) => {
 });
 ```
 
-If a Glue script needs to access external services that Glue does not have an account type for, then you can use a secret fetcher to retrieve a secret value from a Glue account. Secret fetchers are a replacement for environment variables.
+If a Glue script needs to access external services that Glue does not have an account type for, then you can use a secret fetcher to retrieve a secret value from a Glue account. Secret fetchers are a replacement for environment variables. When Glue has a connector for the service, use its credential fetcher instead of a secret fetcher.
 
 ```typescript
 import ExampleClient from "npm:example@2";
@@ -153,6 +154,48 @@ glue.webhook.onPost(async (_event) => {
 ```
 
 Remember: Never hardcode API keys, OAuth tokens, or account credentials in the Glue script. Use Glue credential fetchers and secret fetchers instead.
+
+### Pick the account in code
+
+Every trigger and credential fetcher takes an `accountSelector`. When exactly one connected account matches, Glue uses it without asking. Without a selector, every `glue dev` run stops and asks you to pick accounts (`glue deploy` remembers the last choice; `glue dev` does not).
+
+If you are only ever running the Glue for yourself, it's best to pick an account selector so you get consistent behaviour. If you're sharing the code with someone else and they will want to run it with their own accounts, don't put any account selectors in the code and Glue will ask them for the relevant accounts during `glue dev` or `glue deploy`. 
+
+```typescript
+glue.streak.onNewBoxCreated(PIPELINE_KEY, handler, {
+  accountSelector: { email: "ops@example.com" },
+});
+
+const qbo = glue.quickbooks.createCredentialFetcher({
+  accountSelector: { companyName: "Example Co" },
+});
+```
+
+| Service | Selector keys |
+| --- | --- |
+| streak | `email`, `displayName` |
+| google | `email`, `userId` |
+| slack (bot) | `teamId`, `teamName` |
+| slack (user) | `teamId`, `teamName`, `userId` |
+| quickbooks | `realmId`, `companyName`, `userName`, `userEmail` |
+| claude | `organizationId` |
+| gmail | trigger option `accountEmailAddress` instead |
+
+`{ emailAddress: ... }` is not an option on any fetcher. Use `accountSelector`.
+
+### Limits
+
+- An execution stops after 2 minutes. Anything longer must be split into delayed tasks (see Delays below). Never `sleep` for minutes inside a handler.
+- Memory is limited. For large data sets, fetch and process incrementally, don't fetch all the data upfront and hold it in memory
+- `Deno.openKv()` is not supported and fails silently. Persist state in a Google Sheet, a field on the record, or an outside store.
+
+### Events can arrive late, batched, or twice
+
+Webhooks can be delayed by minutes and delivered in a burst, and a failed execution may be retried. Write glue handlers so running twice on the same event is harmless: look up before you create, and key on a stable id (box key, invoice id).
+
+A delay is not a bug in Glue. If events seem missing, run `glue describe <glue>` and `glue logs <glue> -n 20` and wait a few minutes before concluding anything.
+
+Let errors throw. A handler that catches everything and returns looks like a success in `glue logs` and in the daily email, so nobody finds out. Log the identifying inputs (box key, event type) on the first line of the handler so a failed execution is traceable. Set `{ retryOnFailure: true }` on a trigger only if the handler is safe to re-run.
 
 ### Executions and replay
 
@@ -168,10 +211,35 @@ To replay a production execution locally:
 glue dev --replay <executionId> path/to/your-glue.ts
 ```
 
-While `glue dev` is running, press `r` to replay the last event you received.
+While `glue dev` is running, press `r` to replay the last event you received, or `s` to send a sample event for triggers that support it.
+
+## Writing good Glue code
+Write the shortest glue that does the job. One file, small functions, plain names.
+
+### Comments
+
+Default to none. Names and structure should carry the meaning.
+
+Add a comment only when it says something the code cannot: a constraint from an outside system (a field key, an API quirk, a rate limit), or a "why" a reader would otherwise get wrong.
+
+A comment has to make sense to someone who was not in the conversation that produced the code, including a different AI reading the file later. So no "as discussed", no "per <name>", no history of what the code used to do, no restating the request that led to a change.
+
+If the glue needs an explanation, put it in one block at the bottom of the file under `// About this glue`: what triggers it, what it changes, and anything a person has to set up by hand. Keep it under twenty lines.
+
+Never write banner or divider comments, a comment that repeats the line under it, changelog comments, or TODOs you don't intend to do.
+
+```typescript
+// ❌ Wrong
+// ─────────────── FETCH THE BOX ───────────────
+// Fetch with v1 because, as we found in testing, v2 omits custom fields
+// (see the conversation with Aleem about this).
+const box = await streak.getBox(boxKey);
+
+// ✅ Correct
+const box = await streak.getBox(boxKey); // v1: v2 omits custom fields
+```
 
 ## Common Patterns
-
 ### Webhook Glue
 
 ```typescript
@@ -212,7 +280,7 @@ glue.cron.everyXMinutes(30, () => {
 Glue scripts can not run for more than 2 minutes at a time. Long delays should be implemented with delayed tasks, and long tasks should be split into multiple calls to a delayed task.
 
 ```typescript
-glue.webhooks.onPost(async (event) => {
+glue.webhook.onPost(async (event) => {
   const body = JSON.parse(event.bodyText!);
   const userEmail = body.userEmail;
   await userProcessingTask.schedule(userEmail, { delay: `15 minutes` });
@@ -275,7 +343,15 @@ What this gives you:
 - Hot reload as you edit the file
 - Real events tunneled to your local machine
 - A debugger port by default
-- Replay support for the last event or a specific execution
+- Replay support for the last event (`r`) or a specific execution, and sample events (`s`)
+
+### Working as an agent
+
+- Run `deno check file.ts` before `glue dev`.
+- `glue dev` and `glue deploy` prompt interactively when an account is not pinned by `accountSelector`, when a new account needs OAuth, or when the trigger set changed. The prompt does not read piped stdin. If "Checking accounts needed" sits for more than about 30 seconds, stop and ask the user to run the same command in their terminal once; after that it works headless.
+- Don't background `glue dev` from a tool shell. The child process outlives the shell and holds port 8001. If you hit `AddrInUse`, run `pkill -f 'glue dev'; pkill -f 'deno run --watch'`.
+- Test with a real event in `glue dev` before deploying. Press `r` to replay it after each edit.
+- After deploy: `glue list` (exactly one instance), then trigger once and read `glue logs <glue> -n 1`.
 
 ### Debugging
 
@@ -301,32 +377,36 @@ glue dev --no-debug path/to/your-glue.ts
 
 ```bash
 glue logs -f <glue-name-or-id>
+glue logs --failures <glue-name-or-id>
 glue describe <glue-name-or-id>
 glue describe <execution-id>
 ```
 
 Use `glue logs` to inspect execution history and live runs, and `glue describe` to inspect Glues, deployments, executions, triggers, and accounts.
 
-## Glue Runtime Surface
+  ## Glue Runtime Surface
 
-The main `glue` object exposes integrations including:
+The main `glue` object exposes these integrations. Use only the methods listed here or in `deno doc`; don't guess at names.
 
-- `glue.webhook`
-- `glue.tasks`
-- `glue.secrets`
-- `glue.cron`
-- `glue.github`
-- `glue.gmail`
-- `glue.google`
-- `glue.drive`
-- `glue.sheets`
-- `glue.slack`
-- `glue.stripe`
-- `glue.intercom`
-- `glue.streak`
-- `glue.resend`
-- `glue.openai`
-- `glue.debug`
+| `glue.` | Triggers | Credentials |
+| --- | --- | --- |
+| `webhook` | `onGet`, `onPost`, `onWebhook` | |
+| `cron` | `onCron(crontab, fn)`, `everyXMinutes`, `everyXHours`, `everyXDays` | |
+| `tasks` | `createDelayedTask(fn)` then `.schedule(arg, { delay })` | |
+| `secrets` | | `createSecretFetcher(name)` |
+| `streak` | `onNewBoxCreated`, `onBoxStageChanged`, `onCallLogOrMeetingNoteCreated`, `onBoxEvent` | `createCredentialFetcher` → `.apiKey` |
+| `quickbooks` | `onInvoice*`, `onPayment*`, `onCustomer*`, `onBill*`, `onVendor*`, `onItem*`, `onEvents([...])` | `createCredentialFetcher` |
+| `slack` | `onNewMessage`, `onEvents([...])`. No `app_mention`; filter `onNewMessage` by a text prefix instead | `createBotMessageSendingCredentialFetcher`, `createBotCredentialFetcher({ scopes })`, user variants |
+| `gmail` | `onMessage` | |
+| `google` | | `createCredentialFetcher({ scopes })` → `.accessToken` |
+| `drive` | `onDriveChanged`, `onFileChanged` | |
+| `sheets` | `onNewRow`, `onNewOrUpdatedRow`, `onNewComment`, `onNewSheet` | |
+| `stripe` | `onCustomerCreated`, `onSubscriptionCreated`, `onSubscriptionCanceled`, `onPaymentSucceeded`, `onPaymentFailed`, `onEvents([...])` | `createCredentialFetcher` |
+| `intercom` | `onConversationClosed`, `onEvent([...])` | `createCredentialFetcher` |
+| `github` | `onPullRequestEvent`, `onRepoEvent`, `onOrgEvent` | `createCredentialFetcher` |
+| `notion` | `onPageCreated`, `onPagePropertiesEdited`, `onPageContentEdited`, `onCommentCreated`, `onDatabaseContentUpdated`, `onEvents([...])` | `createCredentialFetcher` |
+| `claude`, `openai`, `resend` | | `createCredentialFetcher` → `.apiKey` |
+| `debug` | internal, unstable | |
 
 Pick the narrowest integration API that matches the task instead of dropping down to lower-level custom plumbing.
 
@@ -337,6 +417,7 @@ Glue deployment bundles your entry file and its local relative imports.
 - Keep the Glue entrypoint as a normal local TypeScript file
 - Put shared code in local files imported relatively from the entrypoint
 - Keep the project layout simple so `glue dev` and `glue deploy` can follow your imports cleanly
+- Run `glue deploy` from the directory that contains the file
 
 ## Quick Reference
 
@@ -345,13 +426,18 @@ Glue deployment bundles your entry file and its local relative imports.
 | Sign in | `glue login` |
 | Check account | `glue whoami` |
 | Create a Glue | `glue create` |
-| Run locally | `glue dev path/to/file.ts` |
+| Typecheck | `deno check path/to/file.ts` |
+| Run locally | `glue dev path/to/file.ts` (`r` replays last event, `s` sends a sample) |
 | Replay production event locally | `glue dev --replay <executionId> path/to/file.ts` |
-| Deploy | `glue deploy path/to/file.ts` |
+| Deploy | `glue deploy -n <name> path/to/file.ts` |
+| Confirm one instance | `glue list` |
 | View logs | `glue logs -f <glue>` |
+| Failures only | `glue logs --failures <glue>` |
+| Find a run by content | `glue logs -s "<text>" <glue>` |
 | Inspect resources | `glue describe <id-or-name>` |
 | Replay deployed execution | `glue replay <executionId>` |
-| List accounts | `glue accounts` |
+| Emergency stop | `glue stop <glue>` |
+| List accounts | `glue accounts list` |
 
 ## Common Mistakes
 
@@ -413,6 +499,33 @@ const apiKey = "super-secret";
 // ✅ Correct - prefer the official SDK for GitHub, Slack, Stripe, Google, etc.
 // Import official client libraries from NPM or JSR.
 // Use Glue credential fetchers or secret fetchers for authentication.
+```
+
+**Fetching everything, then writing everything back**
+
+```typescript
+// ❌ Wrong - loads 30k boxes into memory, then rewrites whole contact arrays
+const all = await fetchAllBoxes(pipelineKey);
+for (const box of all) await updateBox(box.key, { contacts: box.contacts, organizations: box.organizations });
+
+// ✅ Correct - page, change only what you mean to, cap the run
+for await (const page of pageBoxes(pipelineKey, 200)) {
+  for (const box of page) {
+    if (!box.needsChange) continue;
+    await updateBox(box.key, { fields: { [FIELD_KEY]: newValue } });
+  }
+}
+```
+
+**Swallowing errors**
+
+```typescript
+// ❌ Wrong - the execution shows as a success and nobody finds out
+try { await doWork(event); } catch (e) { console.log("failed", e); }
+
+// ✅ Correct - log what you're processing, then let it throw
+console.log("box", event.payload.boxKey, event.type);
+await doWork(event);
 ```
 
 ## Documentation
