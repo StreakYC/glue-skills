@@ -275,6 +275,14 @@ glue.cron.everyXMinutes(30, () => {
 });
 ```
 
+For a schedule tied to local business hours, set an explicit timezone with `onCron`, such as `America/Los_Angeles`. Choose the user's intended timezone; it follows local daylight saving changes. Without a timezone, cron uses UTC.
+
+```typescript
+glue.cron.onCron("0 9 * * 1-5", () => {
+  console.log("Running at 9 AM on weekdays in Los Angeles");
+}, { timezone: "America/Los_Angeles" });
+```
+
 ### Delays
 
 Glue scripts can not run for more than 2 minutes at a time. Long delays should be implemented with delayed tasks, and long tasks should be split into multiple calls to a delayed task.
@@ -328,6 +336,26 @@ glue.github.onPullRequestEvent("owner", "repo", async (event) => {
 });
 ```
 
+### Sending Slack messages with the Glue helper
+
+For simple bot messages, `glue.slack.sendMessageAsBot` fetches the credential, resolves a channel name, and joins the channel if needed and permitted. You can also pass a channel ID. The official Slack SDK remains useful for other Slack operations or message options.
+
+```typescript
+import { glue } from "jsr:@streak-glue/runtime";
+
+const slackFetcher = glue.slack.createBotMessageSendingCredentialFetcher();
+
+glue.webhook.onPost(async () => {
+  await glue.slack.sendMessageAsBot(
+    slackFetcher,
+    { id: "C0123456789" }, // Or a channel name such as "engineering"
+    "The task is complete.",
+  );
+});
+```
+
+The third argument is the message text. To reply in a thread, pass the parent message's timestamp as the optional fourth argument, `threadTs`.
+
 ## Development Workflow
 
 ### Local development
@@ -355,23 +383,46 @@ What this gives you:
 
 ### Debugging
 
-Use normal TypeScript debugging techniques:
+Start with execution history, then reproduce locally. Attach a debugger only if logs and replay do not explain the problem.
 
-- `console.log`
-- your editor debugger
-- Chrome DevTools
-
-If you need to wait for the debugger before running:
+#### 1. Inspect the production execution
 
 ```bash
-glue dev --inspect-wait path/to/your-glue.ts
+glue logs --failures <glue-name-or-id>
+glue describe <execution-id>
 ```
 
-If you want to disable the debugger:
+Read the execution's input, logs, and error to find the first failing step. For incorrect results without an error, use `glue logs <glue-name-or-id>` to find the relevant successful execution too. If the event produced no execution, inspect the Glue's deployment and trigger configuration with `glue describe <glue-name-or-id>` before changing the handler.
+
+#### 2. Reproduce locally with log statements
+
+Add focused `console.log` calls around the failing step: relevant event IDs, values used in a decision, and API result details. Avoid logging credentials or unnecessary personal data.
 
 ```bash
-glue dev --no-debug path/to/your-glue.ts
+glue dev path/to/your-glue.ts
 ```
+
+Trigger the real event and follow the local logs. After an edit, press `r` to replay the last received event and check whether the behavior changed.
+
+#### 3. Replay the production execution locally
+
+Use the execution ID from the production logs to run its recorded input against your local code:
+
+```bash
+glue dev --replay <execution-id> path/to/your-glue.ts
+```
+
+Keep the focused log statements while reproducing and fixing the failure. Local replay runs the handler and can make real external API calls; it does not recreate the external services' state at the time of the original execution. `glue replay <execution-id>` replays on the deployed Glue instead.
+
+#### 4. Attach a debugger if needed
+
+If logs and replay are insufficient, attach your editor's Deno debugger or Chrome DevTools to the local inspector. `glue dev` opens the inspector by default. To wait for attachment before the code runs, combine `--inspect-wait` with the production replay:
+
+```bash
+glue dev --inspect-wait --replay <execution-id> path/to/your-glue.ts
+```
+
+Set breakpoints in the handler, resume execution, and inspect the values around the failing step. Omit `--replay` when debugging a fresh event. Use `--no-debug` when you want to disable the inspector.
 
 ### Production monitoring
 
