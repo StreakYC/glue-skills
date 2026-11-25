@@ -110,6 +110,16 @@ Glue handlers usually do two things:
 
 For example, a Slack message or GitHub pull request can trigger your Glue, and then your code can call another API using the correct account credentials. Prefer an event trigger over a cron that polls for changes.
 
+### Workspaces
+
+Every user has a personal workspace and can create shared ones with `glue workspace create`. Workspace owners invite people with `glue workspace invite <email>`, and `glue workspace members` lists members and pending invites. Run `glue workspace list` to see a user's workspaces and their ids (`w_...`).
+
+- Deployed glues and secrets belong to a workspace, and every member can see and manage them. Dev glues stay private to the person running them.
+- Accounts are owned by one user, who leases them to workspaces with `glue accounts lease`. Glues in a workspace can use any account leased to it, including other members' accounts.
+- `glue migrate <glue> --to <workspaceId>` moves a deployed glue to another workspace, along with the accounts and secrets it uses.
+
+Every command accepts `--workspace <workspaceId>`. Without it, a command may ask which workspace to use, and outside a terminal it exits with a list of the workspaces instead.
+
 ### Accounts, credential fetchers, and secret fetchers
 
 Glue has a concept of accounts that store credentials for specific third-party services. Most kinds of triggers in a Glue script must be associated with a specific account at deployment time (or during `glue dev`) for a deployment to become active.
@@ -140,7 +150,9 @@ glue.webhook.onGet(async (_event) => {
 });
 ```
 
-If a Glue script needs to access external services that Glue does not have an account type for, then you can use a secret fetcher to retrieve a secret value from a Glue account. Secret fetchers are a replacement for environment variables. When Glue has a connector for the service, use its credential fetcher instead of a secret fetcher.
+If a Glue script needs to access external services that Glue does not have an account type for, then you can use a secret fetcher to retrieve a secret value. Secret fetchers are a replacement for environment variables. When Glue has a connector for the service, use its credential fetcher instead of a secret fetcher.
+
+Set a secret with `glue secrets set <KEY> <value>`. Secrets belong to a workspace, and a glue reads the secrets of the workspace it runs in.
 
 ```typescript
 import ExampleClient from "npm:example@2";
@@ -157,7 +169,7 @@ Remember: Never hardcode API keys, OAuth tokens, or account credentials in the G
 
 ### Pick the account in code
 
-Every trigger and credential fetcher takes an `accountSelector`. When exactly one connected account matches, Glue uses it without asking. Without a selector, every `glue dev` run stops and asks you to pick accounts (`glue deploy` remembers the last choice; `glue dev` does not).
+Every trigger and credential fetcher takes an `accountSelector`. When exactly one account in the workspace matches, Glue uses it without asking. Without a selector, every `glue dev` run stops and asks you to pick accounts (`glue deploy` remembers the last choice; `glue dev` does not).
 
 If you are only ever running the Glue for yourself, it's best to pick an account selector so you get consistent behaviour. If you're sharing the code with someone else and they will want to run it with their own accounts, don't put any account selectors in the code and Glue will ask them for the relevant accounts during `glue dev` or `glue deploy`. 
 
@@ -376,6 +388,7 @@ What this gives you:
 ### Working as an agent
 
 - Run `deno check file.ts` before `glue dev`.
+- `glue dev` and `glue deploy` may ask which workspace to use. If the user has more than one, ask them which they mean and pass `--workspace <workspaceId>`: deploying into a shared workspace shares the glue with everyone in it. The CLI remembers the choice for that file and glue name on this machine.
 - `glue dev` and `glue deploy` prompt interactively when an account is not pinned by `accountSelector`, when a new account needs OAuth, or when the trigger set changed. The prompt does not read piped stdin. If "Checking accounts needed" sits for more than about 30 seconds, stop and ask the user to run the same command in their terminal once; after that it works headless.
 - Don't background `glue dev` from a tool shell. The child process outlives the shell and holds port 8001. If you hit `AddrInUse`, run `pkill -f 'glue dev'; pkill -f 'deno run --watch'`.
 - Test with a real event in `glue dev` before deploying. Press `r` to replay it after each edit.
