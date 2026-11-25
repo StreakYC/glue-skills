@@ -4,7 +4,7 @@ description: Use when building, debugging, or deploying Glue automations with th
 license: MIT
 metadata:
   author: Streak
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Glue
@@ -392,7 +392,7 @@ What this gives you:
 - `glue dev` and `glue deploy` prompt interactively when an account is not pinned by `accountSelector`, when a new account needs OAuth, or when the trigger set changed. The prompt does not read piped stdin. If "Checking accounts needed" sits for more than about 30 seconds, stop and ask the user to run the same command in their terminal once; after that it works headless.
 - Don't background `glue dev` from a tool shell. The child process outlives the shell and holds port 8001. If you hit `AddrInUse`, run `pkill -f 'glue dev'; pkill -f 'deno run --watch'`.
 - Test with a real event in `glue dev` before deploying. Press `r` to replay it after each edit.
-- After deploy: `glue list` (exactly one instance), then trigger once and read `glue logs <glue> -n 1`.
+- Deploy a script under the same name and to the same workspace every time, so each deploy replaces the last one. The name comes from `-n <name>`, then a `// glue-name <name>` comment in the file, then the file name. A new name or workspace creates a second glue that also handles every event. After deploying, run `glue list` to check that no older copy of the script is still deployed under another name, then trigger one event and read `glue logs <glue> -n 1`.
 
 ### Debugging
 
@@ -493,8 +493,8 @@ Glue deployment bundles your entry file and its local relative imports.
 | Typecheck | `deno check path/to/file.ts` |
 | Run locally | `glue dev path/to/file.ts` (`r` replays last event, `s` sends a sample) |
 | Replay production event locally | `glue dev --replay <executionId> path/to/file.ts` |
-| Deploy | `glue deploy -n <name> path/to/file.ts` |
-| Confirm one instance | `glue list` |
+| Deploy | `glue deploy -n <name> --workspace <workspaceId> path/to/file.ts` |
+| Check for duplicate glues | `glue list` |
 | View logs | `glue logs -f <glue>` |
 | Failures only | `glue logs --failures <glue>` |
 | Find a run by content | `glue logs -s "<text>" <glue>` |
@@ -502,6 +502,10 @@ Glue deployment bundles your entry file and its local relative imports.
 | Replay deployed execution | `glue replay <executionId>` |
 | Emergency stop | `glue stop <glue>` |
 | List accounts | `glue accounts list` |
+| Share an account with a workspace | `glue accounts lease <accountId>` |
+| Set a secret | `glue secrets set <KEY> <value>` |
+| List workspaces | `glue workspace list` |
+| Move a glue to another workspace | `glue migrate <glue> --to <workspaceId>` |
 
 ## Common Mistakes
 
